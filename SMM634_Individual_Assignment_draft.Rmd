@@ -1,0 +1,462 @@
+---
+title: "SMM634 Individual Assignment"
+author: "Ardi Wira Sudarmo"
+date: "2025-12-04"
+output:
+  #bookdown::html_document2:
+  bookdown::pdf_document2:
+    toc: true
+    number_sections: true
+    fig_caption: true
+bibliography: references.bib
+link-citations: true
+---
+
+```{r setup, include=F, message=F}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyr)
+
+library(ggplot2)
+
+library(MASS)
+library(performance)
+
+library(flextable)
+flextable::set_flextable_defaults(fonts_ignore=T)
+
+```
+
+```{r eval=TRUE, include=FALSE}
+
+df <- read.delim(
+    file = "C:/Users/ardih/Study/City_St_George/SMM634_Analytics_Methods_for_Business/Assignment2/meps.txt",
+    header = TRUE, sep = "\t") |>
+  mutate(general = as.factor(general), #levels=c(5, 4, 3, 2, 1)),
+         mental = as.factor(mental), #levels=c(5, 4, 3, 2, 1)),
+         gender = as.factor(gender),
+         ethnicity = as.factor(ethnicity),
+         hypertension = as.factor(hypertension),
+         hyperlipidemia = as.factor(hyperlipidemia),
+         )
+
+str(df)
+
+```
+
+\newpage
+
+# Model selection for healthcare expenditure
+
+## EDA of `dvexpend`
+
+The healthcare expenditure on doctor visit is recorded as `dvexpend` variable in the `meps` dataset. It is a continuous distribution heavily right-skewed and long-tailed. Empirically the observed range is from 0.0 to around 60000 but its domain is assumed to be $[0, \infty]$ since presumably there is no limit on the expenditure incurred. The mode is 0, as there are 4886 (45%.93%) records having 0 values. Figure \@ref(fig:dvexpendDist) shows the density plot between 0 and 5000.
+
+```{r dvexpendDist, echo=F, warning=F, fig.cap="Distribution of dvexpend"}
+
+df |> ggplot(aes(x=dvexpend)) +
+  #geom_histogram() +
+  geom_density(color='blue') +
+  #ylim(0, 2000) +
+  xlim(0, 5000)
+
+```
+
+Using log-transformation or log-link GLM would be a standard way to handle positive continuous response variable [@HardinHilbe2018], since they ensure that the fitted value would be positive. However the presence of zero values pose a challenge for the log transformation.
+One way around it is to take the log of $(Y + \epsilon)$ where $\epsilon > 0$ is a small positive value. We do not pursue this method because there is another alternative that seems to reflect the data generative process: the hurdle model.
+
+The hurdle model uses two components to handle zero value and the positive value separately. The first part estimates the probability of expenditure being greater than zero, and the second part models the amount of expenditure given that it is greater than zero. We can then use a log-link GLM for the second model since the response variable value is positive.
+
+For predictors, `dvisit` is not used because it is also a response variable to be modeled in the second section. 
+
+## Binary model component for zero value
+
+We will use logistic regression model as the first component. The response variable is a binary variable with value of 1 if `dvexpend` > 0, and 0 otherwise. We first tried all predictor variables, but dropped `mental` categorical variables since they are not statistically significant. The final model coefficients are shown in table \@ref(tab:logit3hTable). No multicollinearity are detected from the VIF values.
+
+```{r include=F}
+
+df_hurdle <- df |>
+  mutate(is_dvexpend_gt0 = ifelse(dvexpend > 0, 1, 0),
+         is_dvisit_gt0 = ifelse(dvisit > 0, 1, 0)
+         )
+
+```
+
+
+```{r include=F}
+
+logit3.h = glm(is_dvexpend_gt0 ~ . -dvexpend - dvisit - is_dvisit_gt0 - mental,
+                 data = df_hurdle,
+                 family = binomial(link = "logit"))
+
+```
+
+```{r logit3hTable, echo=F, tab.cap="Logistic GLM summary table"}
+
+as_flextable(logit3.h)
+
+```
+
+Looking at the diagnostic plots in Figure \@ref(fig:logit3Plot), the model fit seems to be acceptable but with problems. The Q-Q residuals plot seems to show slight deviation at small and high quantiles but it is still reasonably good. There are a few points with very high residuals but they seem to be outliers, although they are not influential points. There seems to non-linearity issue likely due to categorical predictors.
+
+```{r logit3Plot, echo=F, fig.cap="Diagnostic plots of Logistic Regression for non-zero dvexpense"}
+par(mfrow = c(2, 2))
+plot(logit3.h)
+```
+
+
+
+## Positive continuous model component
+
+To model the positive `dvexpend`, we first drop records with 0 `dvexpend` value.
+We then considered Gaussian and Gamma GLM, both with log link function. However the Gaussian models had a higher AIC, and more pronounced deviation in the Q-Q residual plot, so we chose Gamma GLM as the final model.
+
+We started with all predictors, then used lasso shrinkage method for variable selection, in which `mental`, `bmi` and `region` were dropped. The final model coefficients are shown in table \@ref(tab:gamma1dTable)
+
+
+```{r include=F}
+
+df_dvexpend_gt0 <- df |> filter(dvexpend > 0)
+
+```
+
+
+```{r include=F}
+
+gamma1d.nz <- glm(dvexpend ~ general + income + age +
+                ethnicity +
+                gender +
+                education +
+                hypertension +
+                hyperlipidemia +
+                ndvisit + ndvexpend,
+              family = Gamma(link='log'),
+              data = df_dvexpend_gt0 )
+
+```
+
+
+```{r gamma1dTable, echo=F, tab.cap="Gamma GLM summary table"}
+
+as_flextable(gamma1d.nz)
+
+```
+
+Looking at the diagnostic plots in Figure \@ref(fig:gamma1Plot), there seems to be deviation in the higher quantile, where the residual has heavier right tail than normal distribution. Howeverm this is much better than the corresponding plot for Gaussian log-link model. There also seems to a cluster of points with high Pearson residuals. Overall this seems to be about the best we can do.
+
+
+```{r gamma1Plot, echo=F, fig.cap="Diagnostic plots of Gamma GLM for non-zero dvexpense"}
+par(mfrow = c(2, 2))
+plot(gamma1d.nz)
+```
+
+
+
+\newpage
+# Model selection for healthcare utilisation
+
+## EDA of `dvisit`
+
+The `dvisit` in the `meps` dataset is a count variable. Its distribution is heavily right-skewed, with values ranging from 0 to 29 and has a single mode at zero as shown in Figure \@ref(fig:dvisitHist)). In fact, zero values make up around 45.9% of the data. Table \@ref(tab:dvisitFreq) shows the frequency table for dvisit values from 0 to 10.
+
+```{r dvisitHist, fig.cap="Distribution plot of dvisit", echo=F}
+df |> ggplot(aes(x=dvisit)) +
+  geom_bar(fill='blue') +
+  ggtitle('Distribution of number of doctor visits (dvisit)')
+  
+```
+
+
+```{r include=F}
+dvisit.freq.df <- as.data.frame(
+  table(df$dvisit, dnn=c('dvisit'))
+) |> 
+  rename(frequency=Freq) |>
+  mutate(percentage=frequency/sum(frequency)*100)
+
+```
+
+
+```{r dvisitFreq, echo=F, tab.cap="Table of dvisit frequency"}
+
+dvisit.freq.df |> head(11) |>
+  flextable() |>
+  colformat_double(digits=2)
+#dvisit.freq.df %>% head(11) |> pivot_wider(names_from = dvisit, values_from = Freq) |> flextable()
+
+```
+
+We will attempt two standard methods to model `dvisit` count data : Poisson and Negative Binomial GLM.
+Poisson GLM is simpler but has more stringent assumption of constant conditional mean-variance structure (equidispersion). On the other hand, Negative Binomial GLM is more flexible due to the additional dispersion parameter, which can account for overdispersion (when conditional variance is greater than conditional mean) which is common in real datasets.
+
+Zero-inflation is another concern we should worry about given the high occurrence of zeros values. Both Poisson and Negative Binomial GLM can suffer from it and if it occurs, we will need to adjust the model with zero-inflated variant (with an additional component to estimate the probability of excess zeroes occurring) 
+
+A reasonable modelling methodology would be to fit Poisson model first. If there are issues with the Poisson fit (either overdispersion and/or zero-inflation), then we will fit Negative Binomial model and check whether the issues are corrected. 
+
+
+## Poisson GLM on `dvisit`
+
+Assuming the number of doctor visit is recorded over the same period, then each data point has the same exposure, so we do not need to specify an offset in the model.
+For explanatory variables, we will include all variables except `dvexpend`, since this is used as response variable of interest in the first section of analysis.
+
+```{r include=F}
+
+p1 <- glm(dvisit ~ . - dvexpend, 
+    family = poisson(link = "log"),
+    data = df,
+    )
+
+```
+
+
+```{r p1Table, echo=F, tab.cap="Poisson regression summary table"}
+
+as_flextable(p1)
+
+```
+We noticed from Table \@ref(tab:p1Table) that the residual deviance (33671) is much larger than its degrees of freedom (10616).
+Indeed, under the null hypothesis that the dispersion parameter $\phi = 1$, as in the Poisson case, the residual deviance follows $\chi^2_{10616}$
+. The p-value can be computed using:
+
+$$
+p = 1 - F_{\chi^2(10616)}(33671) = 1 - 0.00 = 1.0
+$$
+
+Hence we can reject the null hypothesis and conclude that there is overwhelming evidence of overdispersion.
+
+Another formal method of testing overdispersion is by using the dispersion ratio statistic [@GelmanHill:2007]. We can use `check_overdispersion` function from package `performance`. The test outcome below detects the presence of overdispersion as well.
+
+```{r, echo=F}
+
+check_overdispersion(p1)
+```
+
+
+
+\newpage
+## Negative Binomial GLM on `dvisit`
+
+The outcome of fitting negative binomial GLM is presented in Table \@ref(tab:nb1Table). The dispersion parameter of $0.7078$ which is less than 1 is consistent with the overdispersion we detected in the previous section. Most of predictor variables are statistically significant, the ones that are not (`mental2`, `mental3` and `ethnicity3`) are levels of a categorical variable. They should not be dropped because the other levels are statistically significant. Variable selection procedure using `stepAIC` or lasso do not produce more parsimonious model.
+
+```{r include=F}
+
+nb.1 <- glm.nb(dvisit ~ . - dvexpend,
+               data = df)
+
+```
+
+
+```{r nb1Table, echo=F, tab.cap="Negative Binomial regression summary table"}
+
+as_flextable(nb.1)
+
+```
+
+According to the help page of `check_overdispersion` method, the dispersion ratio test for negative binomial regression is based on simulated residuals. The test yields a p-value of 0.488 which indicates that there is no longer overdispersion issue. 
+
+```{r, echo=F}
+
+check_overdispersion(nb.1)
+```
+
+One way to check the goodness-of-fit of the model is to compare the distribution of expected frequency of `dvisit` from the fitted model with actual observed distribution. Figure \@ref(fig:p1PredictedHist) indicates zero-inflation problem in the Poisson model since there is a noticeable gap between the predicted and actual count of zero values. Indeed large discrepencies exist for many values of dvisit, which indicate that Poisson GLM does not fit the data well.
+
+In comparison, Figure \@ref(fig:nb1PredictedHist) shows Negative Binomial GLM produces much better fit since the discrepencies between the fitted andactual observed counts are much reduced, especially for low values of `dvisit`. 
+
+
+```{r include=F}
+
+E.counts.p1 <- c()
+
+for(i in seq(from=0, length.out=nrow(dvisit.freq.df))){
+  E.counts.p1 = c(E.counts.p1, round(sum(dpois(i, lambda=fitted(p1)))) ) }
+
+
+E.counts.nb1 <- c()
+
+for(i in seq(from=0, length.out=nrow(dvisit.freq.df))) {
+  E.counts.nb1 = c(E.counts.nb1, round(sum(dnbinom(i, mu = fitted(nb.1), size = nb.1$theta))) ) 
+}
+
+```
+
+
+```{r include=F}
+
+dvisit.freq.pivot.df <- dvisit.freq.df |>
+  dplyr::select(c('dvisit', 'frequency')) |>
+  mutate(Poisson = E.counts.p1,
+         NegativeBinomial = E.counts.nb1) |> 
+  pivot_longer(cols=c('frequency', 'Poisson', 'NegativeBinomial'),
+               names_to='model',
+               values_to='count'
+               ) |> 
+  mutate(model = factor(model, levels=c('frequency', 'NegativeBinomial', 'Poisson')))
+  
+dvisit.freq.pivot.df
+   
+```
+
+
+```{r p1PredictedHist, echo=F, fig.cap="Histogram of expected count of fitted Poisson GLM vs actual dvisit"}
+
+dvisit.freq.pivot.df |> filter(model != 'NegativeBinomial') |>  
+  ggplot(aes(x=dvisit, y=count, fill=model) )+ 
+    geom_bar(position="dodge", stat="identity") +
+    scale_fill_manual(values=c('frequency'='blue', 'Poisson' = 'red', 'NegativeBinomial' = 'orange'))
+
+```
+
+```{r nb1PredictedHist, echo=F, fig.cap="Histogram of expected count of fitted Negative Binomial GLM vs actual dvisit"}
+
+dvisit.freq.pivot.df |> filter(model != 'Poisson') |>  
+  ggplot(aes(x=dvisit, y=count, fill=model) )+ 
+    geom_bar(position="dodge", stat="identity") +
+    scale_fill_manual(values=c('frequency'='blue', 'Poisson' = 'red', 'NegativeBinomial' = 'orange'))
+
+```
+
+
+\newpage
+# Results summary and interpretation
+
+## The Logistic-Gamma hurdle model for `ndvexpend`
+
+The two-part hurdle model requires careful interpretation.
+
+For each component of the two-part hurdle model, we can interpret the coefficients the usual way: the log odds-ratio for the logistic regression and the percentage change for the Gamma log-link GLM.
+
+For example, holding other variables constant, the odds of non-zero expenditure on doctor visit for a male is on average only $\exp(-8.609) = 0.423$ times than for a female. And the odds for a person in poor general condition is on average $\exp(1.4187) = 4.132$ times than for a person in excellent general condition. A full table of the odd ratio interpretation is presented in Table \@ref(tab:logitInterpretation). Note that the effect for income is very small, because the unit increase is measured in dollar.
+
+```{r include=F}
+intprt.logit3h.df <- data.frame(
+  variable = names(coef(logit3.h)),
+  coefficient = coef(logit3.h)
+) |> 
+  mutate('odd ratio' = exp(coefficient))
+```
+
+```{r logitInterpretation, echo=F, tab.cap="Table of odds ratio interpretation for logistic model of non-zero doctor expenditure"}
+
+intprt.logit3h.df |>
+  filter(variable != '(Intercept)') |> 
+  flextable() |>
+  colformat_double(digits=4)
+```
+
+Since we use log link for the gamma model of the non-zero expenditure, a unit increase of predictor would multiply the response by the exponentiated coefficient. Alternatively, it can also be expressed as percentage change. For example, holding other variables constant, non-zero expenditure on doctor visit for a male is on average only $\exp(-0.1967) = 0.8215$ times of that of a female, or $(\exp(-0.1967)-1) \times 100 \% = -17.85\%$ change. A full table of coefficient interpretation is presented in Table \@ref(tab:gammaInterpretation) .
+
+```{r include=F}
+
+intprt.gamma1d.df <- data.frame(
+  variable = names(coef(gamma1d.nz)),
+  coefficient = coef(gamma1d.nz)
+) |> 
+  mutate(
+    multiplier = exp(coefficient),
+    'percentage change' = (exp(coefficient)-1)*100
+  )
+
+```
+
+```{r gammaInterpretation, echo=F, tab.cap="Table of coefficient interpretation for Gamma model of non-zero doctor expenditure"}
+
+intprt.gamma1d.df |>
+  filter(variable != '(Intercept)') |> 
+  flextable() |>
+  colformat_double(digits=4)
+
+```
+
+
+However, it is not straightforward to interpret the combined marginal effect of a predictor from the coefficients of the two model components. 
+
+In this section we attempt to derive the interpretation of the coefficients for the two-part hurdle model analytically.
+For simplicity, suppose Y is the response variable and there is only a single predictor X, so the two model equations are:
+
+\begin{align}
+log(\frac{\pi}{1-\pi}) &= \alpha_0 + \alpha_1 X  (\#eq:logisticEqn)\\
+log(\mu) &= \beta_0 + \beta_1 X (\#eq:GammaEqn)
+\end{align}
+
+where $\pi = \mathrm{P}(Y>0 \,|\, X )$ and $\mu = \mathbb{E}[Y \,| Y > 0 ,\, X]$
+
+We are interested in $\mathbb{E}[Y | X]$ as well as $\mathbb{E}[Y | X + 1]$,
+
+\begin{align*}
+\mathbb{E}[Y | X] &= \mathrm{P}(Y>0 \,|\, X ) \, \mathbb{E}[Y \,| Y > 0 ,\, X] \; + \;
+    \mathrm{P}(Y=0 \,|\, X ) \, \mathbb{E}[Y \,| Y = 0 ,\, X] \\
+  &= \pi \mu + 0 \\
+  &= \frac{\exp(\alpha_0 + \alpha_1 X)}{ 1 + \exp(\alpha_0 + \alpha_1 X)} \, \exp(\beta_0 + \beta_1 X)
+\end{align*}
+
+Also,
+
+\begin{align*}
+\mathbb{E}[Y | X + 1] &= \frac{\exp(\alpha_0 + \alpha_1 (X+1))}{ 1 + \exp(\alpha_0 + \alpha_1 (X+1))} \, \exp(\beta_0 + \beta_1 (X+1))  \\
+  &= \frac{\exp(\alpha)\exp(\beta)}{1 + \pi (\exp(\alpha_1) - 1)} \, (\pi \mu)
+\end{align*}
+
+
+So it seems there is no simple interpretation to estimate effect on the conditional mean of response variable $Y$ given a unit increase of $X$ . We will discuss in the next section how we might possibly address it.
+
+
+## The Negative Binomial GLM for `ndvisit`
+
+We use log-link for the Negative Binomial GLM, so a unit increase of predictor would multiply the expected number of doctor visit by the exponentiated coefficient, which can alternatively be expressed as percentage change.
+For example, holding other variables constant, the expected number of doctor visit for a person with hypertension is on average only $\exp(0.3121) = 1.3662$ times of that without, or $(\exp(0.3121)-1) \times 100 \% = 36.62\%$ change. A full table of coefficient interpretation is presented in Table \@ref(tab:gammaInterpretation) .
+
+```{r include=F}
+
+intprt.nb1.df <- data.frame(
+  variable = names(coef(nb.1)),
+  coefficient = coef(nb.1)
+) |> 
+  mutate(
+    multiplier = exp(coefficient),
+    'percentage change' = (exp(coefficient)-1)*100
+  )
+
+```
+
+```{r negBinInterpretation, echo=F, tab.cap="Table of coefficient interpretation for Negative Binomial GLM for doctor visit"}
+
+intprt.nb1.df |>
+  filter(variable != '(Intercept)') |> 
+  flextable() |>
+  colformat_double(digits=4)
+
+```
+
+
+\newpage
+# Analysis evaluation and connections
+
+For modelling `dvexpend`, the hurdle model has the advantage of being able to separately estimate the probability of non-zero expenditure as well as the amount given non-zero expenditure. However, it is quite difficult to interpret the combined effect.
+One way to mitigate it is to use average marginal effect (AME) which is computed by estimating the change of response variable given infinitesimal (for continuous) or unit change (for categorical) in a predictor for every data point and then average them. There is an R library called `margins` that implements this approach.
+Another way is to use Linear Probability (OLS) to model the binary variable, which despite its limitation will be more directly interpretable. Yet another way is to consider Tweedie distribution, which with power parameter p between 1 to 2 is equivalent to compound Poisson-Gamma process and can be used to model zero-inflated mixture distribution. This will be a single model, so there is only one set coefficients to interpret.
+
+
+Our negative binomial GLM seems to be adequate in modelling `dvisit` in terms of handling the overdispersion and zero-inflation problem. However, as the diagnostic \@ref(fig:nb1Plot) shows, the Q-Q residuals plot is not entirely satisfactory as there is noticeable deviation from the normal quantile line. The scale-location and residuals plot seems to suggest non-linearity problems as well.  Perhaps, we could try GAM to try address this issue in this model and the hurdle model well.
+
+
+```{r nb1Plot, echo=F, fig.cap="Negative Binomial regression diagnostic plots"}
+
+par(mfrow=c(2,2))
+plot(nb.1)
+
+```
+
+We noted that the signs of coefficient are consistent between the two models. For example the coefficients for `gender1` are negative, whereas `hyperlipidimia1` are positive. This is not surprising as `dvexpend` and `dvisit` are correlated. In our analysis, we did not use them as predictor variables, so we did not explicitly model one on another. An interesting observation is that `mental` are significant for `dvisit` but not significant on `dvexpend`. Perhaps this is because `dvexpend` does not quite capture the expenditure associated with mental health issues as well as the general health problems. 
+
+
+\newpage
+# Appendix
+
+The accompanying R Markdown code for the analysis and the report can be found in the following github repository:
+[https://github.com/asudarmo/smm634_individual_assignment](https://github.com/asudarmo/smm634_individual_assignment)
+
+\newpage
+# Reference
+
