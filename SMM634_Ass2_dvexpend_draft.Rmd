@@ -1,0 +1,551 @@
+---
+title: "SMM634 Assignment2"
+author: "Ardi Wira Sudarmo"
+date: "2025-11-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## EDA
+
+```{r message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(ggplot2)
+
+```
+
+
+```{r}
+library(MASS)
+```
+
+
+```{r}
+
+df <- read.delim(
+    file = "C:/Users/ardih/Study/City_St_George/SMM634_Analytics_Methods_for_Business/Assignment2/meps.txt",
+    header = TRUE, sep = "\t") |>
+  mutate(general = as.factor(general), #levels=c(5, 4, 3, 2, 1)),
+         mental = as.factor(mental), #levels=c(5, 4, 3, 2, 1)),
+         gender = as.factor(gender),
+         ethnicity = as.factor(ethnicity),
+         hypertension = as.factor(hypertension),
+         hyperlipidemia = as.factor(hyperlipidemia),
+         )
+
+str(df)
+
+```
+
+
+```{r}
+
+library(ggridges)
+
+```
+
+
+```{r}
+
+df |> ggplot(aes(x=dvexpend)) +
+  geom_density(color='blue') +
+  xlim(0, 5000)
+
+```
+
+
+```{r}
+
+
+df |> ggplot(aes(x = dvexpend, y = general, fill = general)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none") +
+  xlim(0, 2000)
+
+
+```
+
+```{r}
+
+df |> filter(general == 5) |> 
+  ggplot(aes(x = dvexpend, y = hypertension, fill = hypertension)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none") +
+  xlim(0, 2000)
+
+```
+
+```{r}
+
+df |> filter(general == 5) |> 
+  ggplot(aes(x = dvexpend, y = hyperlipidemia, fill = hyperlipidemia)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none") +
+  xlim(0, 2000)
+
+```
+
+
+```{r}
+
+df |>  group_by(dvisit) |> 
+  summarise(dvexpend_mean = mean(dvexpend),
+            dvexpend_min = min(dvexpend),
+            dvexpend_max = max(dvexpend))
+ 
+```
+
+
+
+
+## Healthcare expenditure (dvexpend) model
+
+
+### Positive Non-zero model
+
+```{r}
+
+df_dvexpend_gt0 <- df |> filter(dvexpend > 0)
+
+summary(df_dvexpend_gt0$dvexpend)
+
+```
+
+```{r}
+
+m1a <- glm(dvexpend ~ . , data=df)
+
+summary(m1a)
+
+```
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(m1a)
+
+```
+
+```{r}
+
+m1a.nz <- glm(dvexpend ~ . -dvisit, family=gaussian(link=identity),
+      data = df_dvexpend_gt0 )
+
+summary(m1a.nz)
+
+```
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(m1a.nz)
+
+```
+
+```{r}
+
+m1b.nz <- glm(dvexpend ~ . -dvisit, family=Gamma(link='log'),
+      data = df_dvexpend_gt0 )
+
+summary(m1b.nz)
+
+```
+
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(m1b.nz)
+
+```
+
+
+```{r}
+
+par(mfrow = c(1, 2))
+plot(density(resid(m1a.nz, type='pearson')))
+plot(density(resid(m1b.nz, type='pearson')))
+
+```
+
+```{r}
+
+par(mfrow = c(1, 2))
+plot(density(rstandard(m1a.nz, type='pearson')))
+plot(density(rstandard(m1b.nz, type='pearson')))
+
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+plot(density(resid(m1a.nz, type='response')))
+plot(density(resid(m1b.nz, type='response')))
+```
+
+
+
+```{r}
+
+m1c.nz <- glm(dvexpend ~ ., family=gaussian(link=log),
+      data = df_dvexpend_gt0 )
+
+summary(m1c.nz)
+
+```
+
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(m1c.nz)
+
+```
+
+### Variable selection (lasso) for non-zero model
+
+
+```{r}
+
+library(glmnet)
+
+```
+
+
+```{r}
+
+X.nz <- model.matrix(m1b.nz)[,-1]
+
+y.nz <-  df_dvexpend_gt0$dvexpend
+
+```
+
+
+```{r}
+
+set.seed(634)
+
+glm_cv.nz <- cv.glmnet(x=X.nz, y=y.nz,
+                family=Gamma(link='log'), 
+                alpha=1, #lasso
+                nfolds=10)
+
+print(glm_cv.nz$lambda.min)
+print(glm_cv.nz$lambda.1se)
+
+```
+
+```{r}
+
+plot(glm_cv.nz)
+
+```
+
+```{r}
+
+lasso1.nz <- glmnet(X.nz, y.nz,
+                     lambda = glm_cv.nz$lambda.1se,
+                     family = Gamma(link='log'),
+                     alpha=1)
+
+coef(lasso1.nz)
+
+```
+
+```{r}
+
+lasso2.nz <- glmnet(X.nz, y.nz,
+                     lambda = exp(-3.3), #glm_cv.nz$lambda.min,  
+                     family = Gamma(link='log'),
+                     alpha=1)
+
+coef(lasso2.nz)
+```
+
+```{r}
+
+m1d.nz <- glm(dvexpend ~ general + income + age +
+                ethnicity +
+                gender +
+                education +
+                hypertension +
+                hyperlipidemia +
+                ndvisit + ndvexpend,
+              family = Gamma(link='log'),
+              data = df_dvexpend_gt0 )
+
+# m1d.nz <- glm(dvexpend ~ general + income + age + education + dvisit + ndvisit,
+#               family = Gamma(link='log'),
+#               data = df_dvexpend_gt0 )
+ 
+summary(m1d.nz)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(m1d.nz)
+```
+
+
+```{r}
+
+m1e.nz <- glm(dvexpend ~ general + income + age +
+                ethnicity +
+                gender +
+                education +
+                #hypertension +
+                hyperlipidemia +
+                ndvisit + ndvexpend,
+              family = Gamma(link='log'),
+              data = df_dvexpend_gt0 )
+
+
+# m1e.nz <- glm(dvexpend ~ income + age + dvisit +
+#               ndvisit + general,
+#               family = Gamma(link='log'),
+#               data = df_dvexpend_gt0 )
+
+summary(m1e.nz)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(m1e.nz)
+```
+
+
+### The hurdle model
+
+
+```{r}
+
+df_hurdle <- df |>
+  mutate(is_dvexpend_gt0 = ifelse(dvexpend > 0, 1, 0),
+         is_dvisit_gt0 = ifelse(dvisit > 0, 1, 0)
+         )
+
+str(df_hurdle)
+
+```
+
+```{r}
+
+library(gglasso)
+
+```
+
+
+
+```{r}
+
+logit1.h = glm(is_dvexpend_gt0 ~ . -dvexpend - dvisit - is_dvisit_gt0,
+                 data = df_hurdle,
+                 family = binomial(link = "logit"))
+
+summary(logit1.h)
+  
+```
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(logit1.h)
+
+```
+
+```{r}
+library(car)
+```
+
+```{r}
+
+vif(logit1.h)
+```
+
+
+```{r}
+
+X.h <- model.matrix(logit1.h)[,-1]
+
+X_groups <- c(1,1,1,1,
+              2,2,2,2,
+              3,4,5,6,
+              7,7,7,
+              8,9,10,11,12,13
+              )
+
+y.h <-  ifelse(df_hurdle$is_dvexpend_gt0 == 0, -1, 1)
+
+```
+
+
+```{r}
+
+gl_logit_cv <- cv.gglasso(x=X.h, y=y.h, group=X_groups,
+           loss='logit',
+           intercept = T, nfolds=10)
+
+
+print(gl_logit_cv$lambda.min)
+print(gl_logit_cv$lambda.1se)
+
+```
+
+
+```{r}
+
+plot(gl_logit_cv)
+
+```
+
+
+```{r}
+
+logit2.h <- gglasso(x=X.h, y=y.h, group=X_groups,
+                    lambda = gl_logit_cv$lambda.1se,
+                    loss='logit')
+
+coef(logit2.h)
+```
+
+```{r}
+
+coef(logit2.h)
+
+```
+
+
+
+
+```{r}
+
+set.seed(634)
+
+glm_cv.logit.h <- cv.glmnet(x=model.matrix(logit1.h)[,-1],
+                       y=df_hurdle$is_dvexpend_gt0,
+                       family = binomial(link = "logit"),
+                       alpha=1, #lasso
+                       nfolds=10)
+
+print(glm_cv.logit.h$lambda.min)
+print(glm_cv.logit.h$lambda.1se)
+
+```
+
+```{r}
+
+plot(glm_cv.logit.h )
+
+```
+
+
+```{r}
+
+lasso1.logit.h <- glmnet(x=model.matrix(logit1.h)[,-1],
+                   y=df_hurdle$is_dvexpend_gt0,,
+                     lambda = glm_cv.logit.h$lambda.1se,
+                     family = binomial(link='logit'),
+                     alpha=1)
+
+coef(lasso1.logit.h)
+
+```
+ 
+
+```{r}
+
+stepAIC(
+  logit1.h,
+  scope = list(lower = ~ ndvisit + ndvexpend, 
+               upper = ~ .),
+  direction = 'both',
+  trace = 0
+)
+
+```
+
+
+```{r}
+
+logit3.h = glm(is_dvexpend_gt0 ~ . -dvexpend - dvisit - is_dvisit_gt0 - mental,
+                 data = df_hurdle,
+                 family = binomial(link = "logit"))
+
+summary(logit3.h)
+  
+```
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(logit3.h)
+
+```
+
+```{r}
+
+library(margins)
+
+```
+
+```{r}
+
+ame.logit3.h <- margins(logit3.h)
+ame.logit3.h
+```
+
+```{r}
+
+dfh.g0 <- dfh.g1 <- df_hurdle
+dfh.g0$gender <- '0'
+dfh.g1$gender <- '1'
+
+mean(predict(logit3.h, newdata=dfh.g1, type='response')) - mean(predict(logit3.h, newdata=dfh.g0, type='response'))
+```
+
+
+```{r}
+
+#df_hurdle_colmeans <- df_hurdle |> mutate_if(is.factor, as.character) |> mutate_if(is.character, as.numeric) |> colMeans()
+
+df_hurdle_colmeans <- df_hurdle |>  select_if(is.numeric) |> colMeans()
+
+df_hurdle_colmeans
+```
+
+```{r}
+
+mem.logit3.h <- margins(logit3.h, variables='bmi', atmeans=T)
+mem.logit3.h
+
+```
+
+
+```{r}
+
+intprt.logit3h.df <- data.frame(
+  variable = names(coef(logit3.h)),
+  coefficient = coef(logit3.h)
+) |> 
+  mutate(odd_ratio = exp(coefficient))
+
+intprt.logit3h.df
+```
+
+```{r}
+
+intprt.logit3h.df <- data.frame(
+  variable = names(coef(logit3.h)),
+  coefficient = coef(logit3.h)
+) |> 
+  mutate(odd_ratio = exp(coefficient))
+
+intprt.logit3h.df
+```

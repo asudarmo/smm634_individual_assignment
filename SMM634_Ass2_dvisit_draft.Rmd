@@ -1,0 +1,275 @@
+---
+title: "SMM634 Assignment2 dvisit"
+author: "Ardi Wira Sudarmo"
+date: "2025-12-04"
+output: html_document
+---
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(ggplot2)
+
+library(MASS)
+library(performance)
+```
+
+
+
+```{r}
+
+df <- read.delim(
+    file = "C:/Users/ardih/Study/City_St_George/SMM634_Analytics_Methods_for_Business/Assignment2/meps.txt",
+    header = TRUE, sep = "\t") |>
+  mutate(general = as.factor(general), #levels=c(5, 4, 3, 2, 1)),
+         mental = as.factor(mental), #levels=c(5, 4, 3, 2, 1)),
+         gender = as.factor(gender),
+         ethnicity = as.factor(ethnicity),
+         hypertension = as.factor(hypertension),
+         hyperlipidemia = as.factor(hyperlipidemia),
+         )
+
+str(df)
+
+```
+
+
+## Doctor visit (dvisit) model
+
+```{r}
+
+df |> ggplot(aes(x=dvisit)) +
+  geom_histogram(bins=30) #+
+  #geom_density() +
+  #xlim(0, 10000)
+```
+
+
+```{r}
+df |> ggplot(aes(x=dvisit)) +
+  geom_bar(fill='blue') +
+  ggtitle('Distribution of number of doctor visits (dvisit)')
+  
+```
+
+
+## Poisson regression
+
+```{r}
+
+p1 <- glm(dvisit ~ . - dvexpend, 
+    family = poisson(link = "log"),
+    data = df,
+    #offset = log(service)
+    )
+summary(p1)
+
+
+```
+
+
+```{r}
+
+pchisq(p1$deviance, p1$df.residual, lower.tail=F)
+
+```
+
+Reject the null hypothesis that $\phi = 1$. 
+
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(p1)
+
+```
+
+```{r}
+
+sum(residuals(p1, type = "pearson")^2) / p1$df.residual
+
+```
+U
+
+```{r}
+check_overdispersion(p1)
+```
+
+
+
+
+```{r}
+as.data.frame(E.counts.p1)
+```
+
+
+
+
+```{r}
+# Create a scatter plot
+plot(df$dvisit,
+     predict(p1, type = "response"),
+     xlab = "Actual Counts", ylab = "Expected Counts",
+     main = "Poisson Regression: Actual vs. Expected Counts")
+
+# Add a 1:1 line for reference
+abline(0, 1, col = "red")
+```
+
+
+
+```{r}
+
+nb.1 <- glm.nb(dvisit ~ . - dvexpend,
+               data = df)
+
+
+```
+
+```{r}
+summary(nb.1)
+```
+
+
+```{r}
+
+par(mfrow=c(2,2))
+plot(nb.1)
+
+```
+
+
+```{r}
+
+check_overdispersion(nb.1)
+
+```
+
+
+```{r}
+dvisit.freq.df <- as.data.frame(
+  table(df$dvisit, dnn=c('dvisit'))
+)
+
+dvisit.freq.df 
+```
+
+```{r}
+E.counts.p1 <- c()
+
+for(i in seq(from=0, length.out=nrow(dvisit.freq.df))){
+  E.counts.p1 = c(E.counts.p1, round(sum(dpois(i, lambda=fitted(p1)))) ) }
+
+E.counts.p1
+```
+
+```{r}
+E.counts.nb1 <- c()
+
+for(i in seq(from=0, length.out=nrow(dvisit.freq.df))) {
+  E.counts.nb1 = c(E.counts.nb1, round(sum(dnbinom(i, mu = fitted(nb.1), size = nb.1$theta))) ) 
+}
+
+E.counts.nb1
+```
+
+```{r}
+
+dvisit.freq.df$E.counts.p1 <- E.counts.p1
+dvisit.freq.df$E.counts.nb1 <- E.counts.nb1
+
+dvisit.freq.df
+```
+
+```{r}
+
+library(tidyr)
+
+```
+
+
+```{r}
+
+dvisit.freq.pivot.df <- dvisit.freq.df |>
+  pivot_longer(cols=c('Freq', 'E.counts.p1', 'E.counts.nb1'),
+               names_to='model',
+               values_to='count'
+               ) |> 
+  mutate(model = factor(model, levels=c('Freq', 'E.counts.nb1', 'E.counts.p1')))
+  
+dvisit.freq.pivot.df
+   
+```
+
+
+
+```{r}
+
+dvisit.freq.pivot.df |> 
+  ggplot(aes(x=dvisit, y=count, fill=model) )+ 
+    geom_bar(position="dodge", stat="identity") +
+    scale_fill_manual(values=c('Freq'='blue', 'E.counts.p1' = 'red', 'E.counts.nb1' = 'green'))
+
+```
+
+
+```{r}
+
+dvisit.freq.pivot.df |> filter(model != 'E.counts.p1') |>  
+  ggplot(aes(x=dvisit, y=count, fill=model) )+ 
+    geom_bar(position="dodge", stat="identity") +
+    scale_fill_manual(values=c('Freq'='blue', 'E.counts.p1' = 'red', 'E.counts.nb1' = 'orange'))
+
+```
+
+```{r}
+
+dvisit.freq.pivot.df |> filter(model != 'E.counts.nb1') |>  
+  ggplot(aes(x=dvisit, y=count, fill=model) )+ 
+    geom_bar(position="dodge", stat="identity") +
+    scale_fill_manual(values=c('Freq'='blue', 'E.counts.p1' = 'red', 'E.counts.nb1' = 'orange'))
+
+```
+
+
+```{r}
+
+p2 <- glm(dvisit ~ ., 
+    family = poisson(link = "log"),
+    data = df,
+    #offset = log(service)
+    )
+summary(p2)
+
+```
+
+```{r}
+
+plot(p2)
+```
+
+```{r}
+
+plot(p1)
+
+```
+
+```{r}
+check_overdispersion(p2)
+```
+
+```{r}
+
+nb.2 <- glm.nb(dvisit ~ .,
+               data = df)
+
+summary(nb.2)
+
+```
+
+```{r}
+check_overdispersion(nb.2)
+```
